@@ -1,14 +1,12 @@
 /*
-  自动循环示例：上电后每秒交替运行/停止（不依赖任何按键）
+  按钮控制电机：按一下开关，电机转3秒
 
-  说明：根据你的要求，程序将不再使用按键控制；上电后立即进入循环：
-    Motor ON（1 秒） -> Motor OFF（1 秒） -> 重复
-
-  接线最简（同前）：
+  接线：
     - TB6612 AIN1 -> ESP32 GPIO 26
     - TB6612 AIN2 -> ESP32 GPIO 27
     - TB6612 PWMA -> ESP32 GPIO 25 (PWM 输出)
     - TB6612 STBY -> ESP32 GPIO 33 (使能脚，HIGH 使能)
+    - 按钮 -> ESP32 GPIO 2 (一端接GPIO2，一端接地)
     - 共地：ESP32 GND 与 TB6612 GND/VM 共地
 */
 
@@ -19,6 +17,7 @@ const int AIN1_PIN = 26; // 驱动 IN1，决定转向
 const int AIN2_PIN = 27; // 驱动 IN2，决定转向
 const int PWMA_PIN = 25; // 驱动 PWM 控制速度
 const int STBY_PIN = 33; // 驱动使能：HIGH=使能, LOW=休眠/禁用
+const int BUTTON_PIN = 4; // 按钮引脚
 
 // ----- PWM 配置 -----
 const int PWM_CHANNEL = 0;    // LEDC 通道
@@ -26,13 +25,14 @@ const int PWM_FREQ = 20000;   // 20kHz，避免听觉噪音
 const int PWM_RES = 8;        // 8-bit 分辨率 -> 0-255
 const int MOTOR_SPEED = 200;  // 默认速度（0-255）
 
-// ----- 自动循环时间（毫秒） -----
-const unsigned long ON_MS = 1000;  // 运行 1 秒
-const unsigned long OFF_MS = 1000; // 停止 1 秒
+// ----- 电机运行时间 -----
+const unsigned long MOTOR_RUN_MS = 3000; // 3秒
 
 // 状态变量
-bool motorIsOn = false;
-unsigned long lastToggleMs = 0;
+bool motorRunning = false;
+unsigned long motorStartTime = 0;
+bool lastButtonState = HIGH; // 初始化为 HIGH
+bool buttonPressed = false; // 新增：标记按钮是否已按下
 
 void setPWM(int duty) {
   duty = constrain(duty, 0, 255);
@@ -62,6 +62,7 @@ void setup() {
   pinMode(AIN2_PIN, OUTPUT);
   pinMode(PWMA_PIN, OUTPUT);
   pinMode(STBY_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP); // 按钮输入，上拉
 
   // 初始化 PWM
   ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RES);
@@ -71,36 +72,48 @@ void setup() {
   enableDriver(true);
   motorStop();
 
-  // 初始化计时器并立即开始第一次运行周期（上电即转）
-  motorIsOn = true;
-  lastToggleMs = millis();
-  motorForward();
-  Serial.println("Auto demo: Motor ON 1s, OFF 1s, repeat (串口 115200)");
+  Serial.println("Button control: Press button to run motor for 3s (串口 115200)");
 }
 
 void loop() {
-  unsigned long now = millis();
+  // 读取按钮状态
+  bool buttonState = digitalRead(BUTTON_PIN);
 
-  if (motorIsOn) {
-    // 如果正在运行，检查是否已超过 ON_MS
-    if (now - lastToggleMs >= ON_MS) {
-      motorIsOn = false;
-      lastToggleMs = now;
-      motorStop();
-      Serial.println("Motor OFF");
-    }
-  } else {
-    // 如果停止状态，检查是否已超过 OFF_MS
-    if (now - lastToggleMs >= OFF_MS) {
-      motorIsOn = true;
-      lastToggleMs = now;
+  // 检测按钮按下（从高到低，且未按下状态）
+  if (lastButtonState == HIGH && buttonState == LOW && !buttonPressed) {
+    buttonPressed = true;
+    if (!motorRunning) {
+      motorRunning = true;
+      motorStartTime = millis();
       motorForward();
-      Serial.println("Motor ON");
+      Serial.println("Motor ON for 3s");
     }
   }
 
-  // 小延时，避免 busy loop（不会影响定时精度）
-  delay(10);
+  // 检测按钮松开（从低到高）
+  if (lastButtonState == LOW && buttonState == HIGH) {
+    buttonPressed = false;
+  }
+
+  // 打印 GPIO 状态变化（调试用）
+  if (buttonState != lastButtonState) {
+    Serial.print("Button GPIO ");
+    Serial.print(BUTTON_PIN);
+    Serial.print(": ");
+    Serial.println(buttonState);
+  }
+
+  lastButtonState = buttonState;
+
+  // 检查电机运行时间
+  if (motorRunning && (millis() - motorStartTime >= MOTOR_RUN_MS)) {
+    motorRunning = false;
+    motorStop();
+    Serial.println("Motor OFF");
+  }
+
+  // 小延时
+  delay(100);
 }
 
 
